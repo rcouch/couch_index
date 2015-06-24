@@ -121,6 +121,12 @@ init({Mod, IdxState}) ->
                 Mod:get(idx_name, IdxState),
                 couch_index_util:hexsig(Mod:get(signature, IdxState))
             ],
+
+            _ = couch_event:subscribe_cond(db_updated, [{{DbName, '$1'},
+                                                         [{'==', '$1',
+                                                           'ddoc_updated'}],
+                                                         ['_']}]),
+
             ?LOG_INFO("Opening index for db: ~s idx: ~s sig: ~p", Args),
             proc_lib:init_ack({ok, self()}),
             gen_server:enter_loop(?MODULE, [], State);
@@ -287,9 +293,8 @@ handle_cast({new_state, NewIdxState}, State) ->
 
     %% notify to event listeners that the index has been
     %% updated
-    couch_index_event:notify({index_update,
-                              {DbName, DDocId,
-                               Mod}}),
+    couch_hooks:run(index_update, DbName, [DbName, DDocId, Mod]),
+
     Args = [
         DbName,
         DDocId,
@@ -317,8 +322,7 @@ handle_cast(delete, State) ->
     DDocId = Mod:get(idx_name, IdxState),
 
     %% notify about the index deletion
-    couch_index_event:notify({index_delete,
-                              {DbName, DDocId, Mod}}),
+    couch_hooks:run(index_reset, DbName, [DbName, DDocId, Mod]),
 
     ok = Mod:delete(IdxState),
 
@@ -330,9 +334,8 @@ handle_cast(ddoc_updated, State) ->
 
     %% notify to event listeners that the index has been
     %% updated
-    couch_index_event:notify({index_update,
-                              {DbName, DDocId,
-                               Mod}}),
+
+    couch_hooks:run(index_update, DbName, [DbName, DDocId, DDocId]),
 
     Shutdown = couch_util:with_db(DbName, fun(Db) ->
         case couch_db:open_doc(Db, DDocId, [ejson_body]) of
@@ -380,7 +383,35 @@ handle_info(commit, State) ->
             erlang:send_after(Delay, self(), commit),
             {noreply, State}
     end;
+handle_info({couch_event, db_updated, _}, State) ->
+    #st{mod = Mod, idx_state = IdxState, waiters = Waiters} = State,
+    DbName = Mod:get(db_name, IdxState),
+    DDocId = Mod:get(idx_name, IdxState),
 
+    %% notify to event listeners that the index has been
+    %% updated
+    couch_hooks:run(index_update, DbName, [DbName, DDocId, DDocId]),
+
+    Shutdown = couch_util:with_db(DbName, fun(Db) ->
+        case couch_db:open_doc(Db, DDocId, [ejson_body]) of
+            {not_found, deleted} ->
+                true;
+            {ok, DDoc} ->
+                {ok, NewIdxState} = Mod:init(Db, DDoc),
+                Mod:get(signature, NewIdxState) =/= Mod:get(signature, IdxState)
+        end
+    end),
+    case Shutdown of
+        true ->
+            case Waiters of
+                [] ->
+                    {stop, normal, State};
+                _ ->
+                    {noreply, State#st{shutdown = true}}
+            end;
+        false ->
+            {noreply, State#st{shutdown = false}}
+    end;
 handle_info({'DOWN', _, _, Pid, _}, #st{mod=Mod, idx_state=IdxState,
                                         indexer=Pid}=State) ->
     Args = [Mod:get(db_name, IdxState),
@@ -395,7 +426,7 @@ handle_info({'DOWN', _, _, _Pid, _}, #st{mod=Mod, idx_state=IdxState}=State) ->
 
     %% notify to event listeners that the index has been
     %% updated
-    couch_index_event:notify({index_delete, {DbName, DDocId, Mod}}),
+    couch_hooks:run(index_reset, DbName, [DbName, DDocId, Mod]),
 
     Args = [DbName, DDocId],
     ?LOG_INFO("Index shutdown by monitor notice for db: ~s idx: ~s", Args),

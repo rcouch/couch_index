@@ -15,10 +15,13 @@
 
 -export([start_link/0, get_index/4, get_index/3, get_index/2]).
 -export([acquire_indexer/3, release_indexer/3]).
--export([config_change/2, update_notify/1]).
+-export([config_change/2]).
 
 -export([init/1, terminate/2, code_change/3]).
 -export([handle_call/3, handle_cast/2, handle_info/2]).
+
+%% hook
+-export([index_update/3, index_reset/3]).
 
 -include_lib("couch/include/couch_db.hrl").
 
@@ -27,8 +30,7 @@
 -define(BY_DB, couchdb_indexes_by_db).
 
 
--record(st, {root_dir,
-             notifier_pid}).
+-record(st, {root_dir}).
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -85,6 +87,12 @@ release_indexer(Module, DbName, DDoc) ->
     end.
 
 
+index_update(DbName, DDocId, Mod) ->
+    couch_event:publish(index_update, {updated, DbName, DDocId, Mod}).
+
+index_reset(DbName, DDocId, Mod) ->
+    couch_event:publish(index_update, {reset, DbName, DDocId, Mod}).
+
 
 init([]) ->
     process_flag(trap_exit, true),
@@ -93,15 +101,28 @@ init([]) ->
     ets:new(?BY_PID, [private, set, named_table]),
     ets:new(?BY_DB, [protected, bag, named_table]),
 
-    {ok, NotifierPid} = couch_db_update_notifier:start_link(
-            fun ?MODULE:update_notify/1),
+    %% register to db changes (only created and deleted events)
+    _ = couch_event:subscribe_cond(db_updated, [{{'_', '$1'},
+                                                 [{'orelse',
+                                                   {'==', '$1', created},
+                                                   {'==', '$1', deleted}}],
+                                                 ['_']}]),
+
+    %% initiase index hooks
+    %%
+    couch_hooks:add(index_update, all, ?MODULE, index_update, 0),
+    couch_hooks:add(index_reset, all, ?MODULE, index_delete, 0),
+
     RootDir = couch_index_util:root_dir(),
     couch_file:init_delete_dir(RootDir),
-    {ok, #st{root_dir=RootDir,
-             notifier_pid=NotifierPid}}.
+    {ok, #st{root_dir=RootDir}}.
 
 
 terminate(_Reason, _State) ->
+    %% unregister hooks
+    couch_hooks:remove(index_update, all, ?MODULE, index_update, 0),
+    couch_hooks:remove(index_reset, all, ?MODULE, index_reset, 0),
+    %% kil index processes
     Pids = [Pid || {Pid, _} <- ets:tab2list(?BY_PID)],
     lists:map(fun couch_util:shutdown_sync/1, Pids),
     ok.
@@ -138,6 +159,11 @@ handle_call({reset_indexes, DbName}, _From, State) ->
 handle_cast({reset_indexes, DbName}, State) ->
     reset_indexes(DbName, State#st.root_dir),
     {noreply, State}.
+
+
+handle_info({couch_event, db_updated, {DbName, _}}, Server) ->
+    reset_indexes(DbName, Server#st.root_dir),
+    {noreply, Server};
 
 handle_info({'EXIT', Pid, Reason}, Server) ->
     case ets:lookup(?BY_PID, Pid) of
@@ -203,22 +229,3 @@ config_change("couchdb", "view_index_dir") ->
     exit(whereis(?MODULE), config_change);
 config_change("couchdb", "index_dir") ->
     exit(whereis(?MODULE), config_change).
-
-
-update_notify({deleted, DbName}) ->
-    gen_server:cast(?MODULE, {reset_indexes, DbName});
-update_notify({created, DbName}) ->
-    gen_server:cast(?MODULE, {reset_indexes, DbName});
-update_notify({ddoc_updated, {DbName, DDocId}}) ->
-    lists:foreach(
-        fun({_DbName, {_DDocId, Sig}}) ->
-            case ets:lookup(?BY_SIG, {DbName, Sig}) of
-                [{_, IndexPid}] ->
-                    (catch gen_server:cast(IndexPid, ddoc_updated));
-                [] ->
-                    ok
-            end
-        end,
-        ets:match_object(?BY_DB, {DbName, {DDocId, '$1'}}));
-update_notify(_) ->
-    ok.

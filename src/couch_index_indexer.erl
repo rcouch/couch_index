@@ -24,7 +24,6 @@
                 refresh_pid=nil,
                 db_updates=0,
                 tref=nil,
-                notifier=nil,
                 locks}).
 
 
@@ -109,8 +108,12 @@ handle_cast(_Msg, State) ->
 handle_info(start_indexing, #state{index=Index,
                                    dbname=DbName,
                                    refresh_interval=R}=State) ->
+
+
     %% start the db notifier to watch db update events
-    {ok, NotifierPid} = start_db_notifier(DbName),
+    _ = couch_event:subscribe_cond(db_updated, [{{DbName, '$1'},
+                                                 [{'==', '$1', updated}],
+                                                 ['_']}]),
 
     %% start the timer
     {ok, TRef} = timer:send_interval(R, self(), refresh_index),
@@ -119,7 +122,7 @@ handle_info(start_indexing, #state{index=Index,
     Pid = spawn_link(fun() ->
                              refresh_index(DbName, Index)
                      end),
-    {noreply, State#state{refresh_pid=Pid, tref=TRef, notifier=NotifierPid}};
+    {noreply, State#state{refresh_pid=Pid, tref=TRef}};
 handle_info(refresh_index, #state{refresh_pid=Pid}=State) when is_pid(Pid) ->
     {noreply, State};
 handle_info(refresh_index, #state{index=Index,
@@ -154,22 +157,17 @@ handle_info({'DOWN', MRef, _, Pid, _}, #state{locks=Locks}=State) ->
         false -> {noreply, NState}
     end;
 
-handle_info({'EXIT', Pid, _Reason}, #state{notifier=Pid}=State) ->
-    %% db notifier exited
-    {stop, normal, State#state{notifier=nil}}.
+handle_info({couch_event, db_updated, _}, State) ->
+    NState = do_update(State),
+    {noreply, NState}.
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-terminate(_Reason, #state{refresh_pid=RPid, tref=TRef, notifier=Pid}) ->
+terminate(_Reason, #state{refresh_pid=RPid, tref=TRef}) ->
     if TRef /= nil ->
             timer:cancel(TRef);
         true -> ok
-    end,
-
-    case is_pid(Pid) of
-        true -> couch_util:shutdown_sync(Pid);
-        _ -> ok
     end,
 
     case is_pid(RPid) of
@@ -213,16 +211,6 @@ get_refresh_interval() ->
             couch_config:get("couch_index", "refresh_interval", "1000")
     ).
 
-%% db notifier
-start_db_notifier(DbName) ->
-    Self = self(),
-
-    couch_db_update_notifier:start_link(fun
-            ({updated, Name}) when Name =:= DbName ->
-                gen_server:cast(Self, updated);
-            (_) ->
-                ok
-        end).
 
 do_update(#state{index=Index, dbname=DbName,
                  threshold=Threshold,
