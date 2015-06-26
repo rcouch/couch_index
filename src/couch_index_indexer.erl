@@ -113,7 +113,7 @@ handle_info(start_indexing, #state{index=Index,
     %% start the db notifier to watch db update events
     _ = couch_event:subscribe_cond(db_updated, [{{DbName, '$1'},
                                                  [{'==', '$1', updated}],
-                                                 ['_']}]),
+                                                 [true]}]),
 
     %% start the timer
     {ok, TRef} = timer:send_interval(R, self(), refresh_index),
