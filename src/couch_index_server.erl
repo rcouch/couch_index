@@ -111,7 +111,7 @@ init([]) ->
     %% initiase index hooks
     %%
     couch_hooks:add(index_update, all, ?MODULE, index_update, 0),
-    couch_hooks:add(index_reset, all, ?MODULE, index_delete, 0),
+    couch_hooks:add(index_reset, all, ?MODULE, index_reset, 0),
 
     RootDir = couch_index_util:root_dir(),
     couch_file:init_delete_dir(RootDir),
