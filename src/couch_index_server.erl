@@ -106,7 +106,7 @@ init([]) ->
                                                  [{'orelse',
                                                    {'==', '$1', created},
                                                    {'==', '$1', deleted}}],
-                                                 ['_']}]),
+                                                 [true]}]),
 
     %% initiase index hooks
     %%

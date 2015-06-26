@@ -125,7 +125,7 @@ init({Mod, IdxState}) ->
             _ = couch_event:subscribe_cond(db_updated, [{{DbName, '$1'},
                                                          [{'==', '$1',
                                                            'ddoc_updated'}],
-                                                         ['_']}]),
+                                                         [true]}]),
 
             ?LOG_INFO("Opening index for db: ~s idx: ~s sig: ~p", Args),
             proc_lib:init_ack({ok, self()}),
