@@ -172,7 +172,8 @@ handle_info({'EXIT', Pid, Reason}, Server) ->
                 ets:match_object(?BY_DB, {DbName, {'$1', Sig}}),
             rem_from_ets(DbName, Sig, DDocId, Pid);
         [] when Reason /= normal ->
-            exit(Reason);
+            couch_log:warn("unhandled error ~p~n", [Reason]),
+            ok;
         _Else ->
             ok
     end,
@@ -210,7 +211,7 @@ reset_indexes(DbName, Root) ->
     end,
     lists:foreach(Fun, ets:lookup(?BY_DB, DbName)),
     Path = couch_index_util:index_dir("", DbName),
-    couch_file:nuke_dir(Root, Path).
+    catch couch_file:nuke_dir(Root, Path).
 
 
 add_to_ets(DbName, Sig, DDocId, Pid) ->
