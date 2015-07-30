@@ -286,6 +286,9 @@ handle_cast({new_state, NewIdxState}, State) ->
         commit_delay=Delay
     } = State,
     assert_signature_match(Mod, OldIdxState, NewIdxState),
+    OldGSeq = Mod:get(group_seq, OldIdxState),
+    CurrGSeq = Mod:get(group_seq, NewIdxState),
+    
     CurrSeq = Mod:get(update_seq, NewIdxState),
 
     DbName = Mod:get(db_name, NewIdxState),
@@ -293,7 +296,12 @@ handle_cast({new_state, NewIdxState}, State) ->
 
     %% notify to event listeners that the index has been
     %% updated
-    couch_hooks:run(index_update, DbName, [DbName, DDocId, Mod]),
+    if 
+        (OldGSeq =/= CurrGSeq) ->
+            couch_hooks:run(index_update, DbName, [DbName, DDocId, Mod]);
+        true ->
+            ok
+    end,
 
     Args = [
         DbName,

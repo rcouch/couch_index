@@ -20,7 +20,6 @@
 root_dir() ->
   couch_config:get("couchdb", "view_index_dir").
 
-
 index_dir(Module, DbName) when is_binary(DbName) ->
     DbDir = "." ++ binary_to_list(DbName) ++ "_design",
     filename:join([root_dir(), DbDir, Module]);
@@ -44,8 +43,6 @@ load_doc(Db, {DocId, Rev}, Opts) ->
         #doc{deleted=false} = Doc -> Doc;
         _ -> null
     end.
-
-
 load_doc(Db, DocId, Rev, Options) ->
     case Rev of
         nil -> % open most recent rev
@@ -61,7 +58,6 @@ load_doc(Db, DocId, Rev, Options) ->
             end
     end.
 
-
 sort_lib({Lib}) ->
     sort_lib(Lib, []).
 sort_lib([], LAcc) ->
@@ -71,7 +67,6 @@ sort_lib([{LName, {LObj}}|Rest], LAcc) ->
     sort_lib(Rest, [{LName, LSorted}|LAcc]);
 sort_lib([{LName, LCode}|Rest], LAcc) ->
     sort_lib(Rest, [{LName, LCode}|LAcc]).
-
 
 hexsig(Sig) ->
     couch_util:to_hex(binary_to_list(Sig)).
